@@ -6,22 +6,21 @@
 // ESP8266 GPIO Timer Firmware
 // Reads input from GPIO pin, if high turns on another GPIO for 5 minutes, then turns it off
 
-const char* ssid = "XXXXX";
-const char* password = "xxxxxx";
-const char* webAppUrl = "xxxxxx";
+const char* ssid = "xxxxx";
+const char* password = "xxxxx";
+const char* webAppUrl = "xxxxx";
 
 // Pin definitions
-const int INPUT_PIN = 16;   // GPIO pin for input (change as needed)
 const int ON_PIN = 4;  // GPIO pin for output (change as needed)
-const int OFF_PIN = 4;  // GPIO pin for output (change as needed)
 
 // Timer variables
 unsigned long timerStartTime = 0;
 const unsigned long TIMER_DURATION = 5 * 60 * 1000; // 5 minutes in milliseconds
-const usigned int WIFI_RETRY_COUNT = 30;
+const unsigned long INTERVAL_DURATION = 12UL * 60UL * 60UL * 1000UL; // 12 hours in milliseconds
+const unsigned int WIFI_RETRY_COUNT = 30;
 bool timerActive = false;
-bool lastInputState = false;
 unsigned int retries = 0;
+unsigned long lastAutoStartTime = 0;
 
 void setup() {
   // Initialize serial communication for debugging
@@ -37,31 +36,25 @@ void setup() {
   }
   Serial.println("\nWiFi connected.");
 
-  // Configure input pin (no pull-up/pull-down)
-  pinMode(INPUT_PIN, INPUT);
-
   // Configure output pin (relay is active-low, controlled by ground)
   pinMode(ON_PIN, OUTPUT);
-  pinMode(OFF_PIN, OUTPUT);
   digitalWrite(ON_PIN, HIGH); // Start with relay OFF (HIGH = relay OFF, LOW = relay ON)
-  digitalWrite(OFF_PIN, HIGH); // Start with relay OFF (HIGH = relay OFF, LOW = relay ON)
-  digitalWrite(INPUT_PIN, LOW);
 
   Serial.println("ESP8266 GPIO Timer initialized");
-  Serial.print("Input pin: GPIO ");
-  Serial.println(INPUT_PIN);
   Serial.print("Output pin: GPIO ");
   Serial.println(ON_PIN);
   Serial.print("Timer duration: ");
   Serial.print(TIMER_DURATION / 1000);
   Serial.println(" seconds");
-  Serial.println("Note: Input triggers on HIGH (rising edge)");
   Serial.println("Note: Relay is active-low (LOW = ON, HIGH = OFF)");
+
+  // Trigger first run immediately on boot; set to millis() to wait full 12h before first run
+  lastAutoStartTime = millis() - INTERVAL_DURATION;
 
   reportState("esp", "on");
 }
 
-void reportState(char* device, char* state) {
+void reportState(const char* device, const char* state) {
   if (WiFi.status() == WL_CONNECTED) {
     WiFiClientSecure client;
     HTTPClient http;
@@ -94,18 +87,15 @@ void reportState(char* device, char* state) {
 }
 
 void loop() {
-  // Read current input state
-  bool currentInputState = digitalRead(INPUT_PIN);
-
-  // Detect rising edge (transition from LOW to HIGH)
-  if (currentInputState == HIGH && lastInputState == LOW) {
-    // Input just went high - start timer
-    if (!timerActive) {
+  // Scheduled trigger: turn ON_PIN every 12 hours for 5 minutes
+  if (!timerActive) {
+    unsigned long sinceLast = millis() - lastAutoStartTime;
+    if (sinceLast >= INTERVAL_DURATION) {
       timerStartTime = millis();
       timerActive = true;
-      digitalWrite(ON_PIN, LOW); // Set LOW to turn relay ON (active-low)
-      Serial.println("Input detected HIGH - Timer started, relay ON");
-
+      lastAutoStartTime = timerStartTime;
+      digitalWrite(ON_PIN, LOW); // active-low: LOW = ON
+      Serial.println("Scheduled 12h trigger - Timer started, pump ON");
       reportState("pump", "on");
     }
   }
@@ -118,22 +108,14 @@ void loop() {
       // 5 minutes have passed - turn off relay
       digitalWrite(ON_PIN, HIGH); // Set HIGH to turn relay OFF (active-low)
       timerActive = false;
-      Serial.println("5 minutes elapsed - Timer stopped, relay OFF");
+      Serial.println("5 minutes elapsed - Timer stopped, pump OFF");
 
       reportState("pump", "off");
     } else {
       // Timer still running
       unsigned long remainingSeconds = (TIMER_DURATION - elapsedTime) / 1000;
-      // if (elapsedTime % 10000 == 0) { // Print every 10 seconds
-        Serial.print("Timer running - ");
-        Serial.print(remainingSeconds);
-        Serial.println(" seconds remaining"); 
-      // }
     }
   }
-
-  // Update last input state for edge detection
-  lastInputState = currentInputState;
 
   // Small delay to prevent excessive CPU usage
   delay(100);
